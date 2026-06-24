@@ -1,0 +1,560 @@
+!pip install easyocr opencv-python-headless pandas matplotlib
+
+import cv2
+import easyocr
+import pandas as pd
+import numpy as np
+import re
+import os
+import time
+from google.colab import files
+from collections import defaultdict
+import zipfile
+import matplotlib.pyplot as plt
+import matplotlib.image as mpimg
+
+# === MANUAL DATASET CONFIGURATION ===
+print("📁 Loading manual dataset configuration...")
+
+# Enhanced valid plate patterns - added more patterns
+VALID_PLATES_MANUAL = {
+    # Complete plate numbers
+    'AP31TR1234', 'MH01AB1234', 'KA01CD5678', 'DL02EF9012', 'TN09GH3456',
+    'GJ05IJ6789', 'RJ14KL0123', 'UP16MN4567', 'MP15OP8901', 'WB19QR2345',
+    'KL07AB1234', 'TS08CD5678', 'HR06EF9012', 'PB03GH3456', 'RJ14IJ6789',
+
+    # Add MIC patterns based on your image
+    'MIC2016', 'MIC2016D64', 'MIC201664', 'MIC2016D', 'MIC2016D6',
+
+    # State codes only
+    'AP', 'MH', 'TN', 'DL', 'KA', 'KL', 'TS', 'GA', 'GJ', 'HR',
+    'MP', 'PB', 'RJ', 'UP', 'WB', 'BR', 'OR', 'AS', 'JH', 'UK',
+    'PY', 'CH', 'AN', 'LD', 'SK'
+}
+
+# Manual RTO codes (same as before)
+RTO_DATA_MANUAL = {
+    "AP": {
+        "01": "Adilabad", "02": "Anantapur", "03": "Chittoor", "04": "Kadapa",
+        "05": "East Godavari", "06": "Guntur", "07": "Hyderabad", "08": "Karimnagar",
+        "09": "Khammam", "10": "Krishna", "11": "Kurnool", "12": "Mahbubnagar",
+        "13": "Medak", "14": "Nalgonda", "15": "Nellore", "16": "Nizamabad",
+        "17": "Prakasam", "18": "Rangareddy", "19": "Srikakulam", "20": "Visakhapatnam Rural",
+        "21": "Vizianagaram", "22": "Warangal", "23": "West Godavari", "24": "Eluru",
+        "25": "Nandyal", "26": "Kakinada", "27": "Sangareddy", "28": "Narasaraopet",
+        "29": "Rajahmundry Rural", "30": "Siddipet", "31": "Visakhapatnam Urban", "32": "Vijayawada"
+    },
+    "MH": {
+        "01": "Mumbai", "02": "Mumbai Rural", "03": "Mumbai (Western Suburbs)",
+        "04": "Thane", "05": "Kalyan", "06": "Pune", "07": "Pimpri-Chinchwad",
+        "08": "Nashik", "09": "Nagpur", "10": "Aurangabad", "11": "Solapur",
+        "12": "Kolhapur", "13": "Sholapur", "14": "Ratnagiri", "15": "Sangli",
+        "16": "Jalgaon", "17": "Akola", "18": "Ahmednagar", "19": "Dhule",
+        "20": "Satara", "21": "Jalna", "22": "Nanded", "23": "Parbhani",
+        "24": "Amravati", "25": "Yavatmal", "26": "Latur", "27": "Buldhana",
+        "28": "Osmanabad", "29": "Wardha", "30": "Washim", "31": "Hingoli",
+        "32": "Gondia", "33": "Chandrapur", "34": "Gadchiroli", "35": "Bhandara",
+        "36": "Beed", "37": "Sindhudurg", "38": "Raigad", "39": "Jalgaon",
+        "40": "Nandurbar", "41": "Mumbai Central", "42": "Mumbai Eastern Suburbs",
+        "43": "Nagpur Rural", "44": "Pune Rural", "45": "Thane Rural",
+        "46": "Kalyan Rural", "47": "Nashik Rural", "48": "Aurangabad Rural",
+        "49": "Solapur Rural", "50": "Kolhapur Rural", "51": "Ratnagiri Rural",
+        "52": "Sangli Rural"
+    },
+    "KA": {
+        "01": "Bangalore Central", "02": "Bangalore North", "03": "Bangalore South",
+        "04": "Bangalore East", "05": "Bangalore West", "06": "Tumkur",
+        "07": "Kolar", "08": "KGF", "09": "Mysore", "10": "Chamarajanagar",
+        "11": "Mandya", "12": "Madikeri", "13": "Hassan", "14": "Shimoga",
+        "15": "Chitradurga", "16": "Davanagere", "17": "Bellary", "18": "Raichur",
+        "19": "Bidar", "20": "Gulbarga", "21": "Bijapur", "22": "Bagalkot",
+        "23": "Belgaum", "24": "Dharwad", "25": "Uttara Kannada", "26": "Karwar",
+        "27": "Haveri", "28": "Gadag", "29": "Koppal", "30": "Mangalore",
+        "31": "Udupi", "32": "Chikmagalur", "33": "Kodagu", "34": "Ramanagara",
+        "35": "Chikkaballapur", "36": "Yadgir", "37": "Bangalore Rural"
+    },
+    "DL": {
+        "01": "Central Delhi", "02": "South Delhi", "03": "East Delhi",
+        "04": "North Delhi", "05": "North West Delhi", "06": "West Delhi",
+        "07": "South West Delhi", "08": "New Delhi", "09": "Shahdara",
+        "10": "Rohini", "11": "Dwarka", "12": "Vikaspuri"
+    },
+    "TN": {
+        "01": "Chennai Central", "02": "Chennai North", "03": "Chennai South",
+        "04": "Chennai East", "05": "Chennai West", "06": "Kanchipuram",
+        "07": "Tiruvallur", "08": "Vellore", "09": "Tirupattur", "10": "Krishnagiri",
+        "11": "Dharmapuri", "12": "Salem", "13": "Namakkal", "14": "Erode",
+        "15": "Nilgiris", "16": "Coimbatore", "17": "Tiruppur", "18": "Dindigul",
+        "19": "Karur", "20": "Tiruchirappalli", "21": "Perambalur", "22": "Ariyalur",
+        "23": "Cuddalore", "24": "Nagapattinam", "25": "Thiruvarur", "26": "Thanjavur",
+        "27": "Pudukkottai", "28": "Sivaganga", "29": "Madurai", "30": "Theni",
+        "31": "Virudhunagar", "32": "Ramanathapuram", "33": "Thoothukudi",
+        "34": "Tirunelveli", "35": "Kanniyakumari"
+    },
+    "GJ": {
+        "01": "Ahmedabad", "02": "Amreli", "03": "Anand", "04": "Aravalli",
+        "05": "Banaskantha", "06": "Bharuch", "07": "Bhavnagar", "08": "Botad",
+        "09": "Chhota Udaipur", "10": "Dahod", "11": "Dang", "12": "Devbhoomi Dwarka",
+        "13": "Gandhinagar", "14": "Gir Somnath", "15": "Jamnagar", "16": "Junagadh",
+        "17": "Kutch", "18": "Kheda", "19": "Mahisagar", "20": "Mehsana",
+        "21": "Morbi", "22": "Narmada", "23": "Navsari", "24": "Panchmahal",
+        "25": "Patan", "26": "Porbandar", "27": "Rajkot", "28": "Sabarkantha",
+        "29": "Surat", "30": "Surendranagar", "31": "Tapi", "32": "Vadodara",
+        "33": "Valsad"
+    }
+}
+
+# Manual state mappings
+STATE_MAP_MANUAL = {
+    "AP": "Andhra Pradesh", "MH": "Maharashtra", "TN": "Tamil Nadu",
+    "DL": "Delhi", "KA": "Karnataka", "KL": "Kerala", "TS": "Telangana",
+    "GA": "Goa", "GJ": "Gujarat", "HR": "Haryana", "MP": "Madhya Pradesh",
+    "PB": "Punjab", "RJ": "Rajasthan", "UP": "Uttar Pradesh", "WB": "West Bengal",
+    "BR": "Bihar", "OR": "Odisha", "AS": "Assam", "JH": "Jharkhand",
+    "UK": "Uttarakhand", "PY": "Puducherry", "CH": "Chandigarh",
+    "AN": "Andaman and Nicobar", "LD": "Lakshadweep", "SK": "Sikkim",
+    "MIC": "Special Series"  # Added for MIC series
+}
+
+print(f"✅ Manual dataset loaded:")
+print(f"   • Valid plate patterns: {len(VALID_PLATES_MANUAL)}")
+print(f"   • States in RTO database: {len(RTO_DATA_MANUAL)}")
+print(f"   • Total state mappings: {len(STATE_MAP_MANUAL)}")
+
+# === INITIALIZE OCR ===
+print("🔄 Initializing OCR...")
+reader = easyocr.Reader(['en'], gpu=True)  # Use GPU for faster processing
+
+# === UPLOAD VIDEO ===
+print("📤 Upload your video file for processing")
+uploaded = files.upload()
+video_path = list(uploaded.keys())[0]
+
+# === CREATE OUTPUT DIRECTORY FOR PLATE IMAGES ===
+output_dir = "detected_plates"
+os.makedirs(output_dir, exist_ok=True)
+print(f"📁 Created output directory: {output_dir}")
+
+# === ENHANCED PROCESSING FUNCTIONS ===
+def clean_plate_text(text):
+    """Enhanced text cleaning using dataset patterns"""
+    # Remove special characters, keep only alphanumeric
+    text = re.sub(r'[^A-Z0-9]', '', text.upper())
+
+    # Enhanced character corrections based on common misreads
+    corrections = {
+        'O': '0', 'I': '1', 'L': '1', 'J': '1', 'Z': '2',
+        'S': '5', 'B': '8', 'G': '6', 'D': '0', 'Q': '0',
+        'T': '7', ' ': '', 'U': '0', 'Y': '7', 'A': '4'
+    }
+
+    for wrong, right in corrections.items():
+        text = text.replace(wrong, right)
+
+    return text
+
+def is_valid_plate_enhanced(text, valid_plates):
+    """Enhanced validation using manual dataset"""
+    if len(text) < 4:  # Reduced minimum length for plates like MIC2016
+        return False
+
+    # Check against manual dataset patterns
+    if text in valid_plates:
+        return True
+
+    # Check state codes from manual dataset
+    state_code = text[:2]
+    if state_code in valid_plates:
+        return True
+
+    # Enhanced pattern matching for various plate formats
+    patterns = [
+        r'^[A-Z]{2}\d{1,2}[A-Z]{1,3}\d{3,4}$',  # Standard Indian plates
+        r'^[A-Z]{3}\d{4}$',                      # 3 letters + 4 digits
+        r'^\d{2}[A-Z]{2}\d{4}$',                 # 2 digits + 2 letters + 4 digits
+        r'^[A-Z]{2}\d{2}[A-Z]{2}\d{4}$',         # State + digits + letters + digits
+        r'^MIC\d{4}[A-Z]?\d*$',                  # MIC series like MIC2016, MIC2016D64
+        r'^[A-Z]{3}\d{3,4}$',                    # Three letters followed by 3-4 digits
+        r'^[A-Z]{2}\d{4}$',                      # Two letters + 4 digits
+        r'^\d{3,4}[A-Z]{2,3}$',                  # 3-4 digits + 2-3 letters
+    ]
+
+    return any(re.match(pattern, text) for pattern in patterns)
+
+def get_plate_info(plate_number, rto_data):
+    """Get detailed information using manual dataset"""
+    if len(plate_number) < 2:
+        return "Unknown", "Unknown"
+
+    # Special handling for MIC series
+    if plate_number.startswith('MIC'):
+        return "Special Series", "Government/Commercial"
+
+    state_code = plate_number[:2]
+    district_code = plate_number[2:4] if len(plate_number) >= 4 else "??"
+
+    state_name = STATE_MAP_MANUAL.get(state_code, f"Unknown ({state_code})")
+
+    # Use manual RTO information
+    if state_code in rto_data and district_code in rto_data[state_code]:
+        district_name = rto_data[state_code][district_code]
+    else:
+        district_name = f"Unknown ({district_code})"
+
+    return state_name, district_name
+
+def enhanced_plate_detection(frame):
+    """Enhanced plate detection with multiple methods"""
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+
+    # Method 1: Standard edge detection
+    gray1 = cv2.bilateralFilter(gray, 11, 17, 17)
+    edges1 = cv2.Canny(gray1, 30, 200)
+
+    # Method 2: Adaptive threshold
+    adaptive_thresh = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+                                          cv2.THRESH_BINARY, 11, 2)
+
+    # Method 3: Morphological operations
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
+    morph = cv2.morphologyEx(gray, cv2.MORPH_CLOSE, kernel)
+    edges2 = cv2.Canny(morph, 50, 150)
+
+    # Combine methods
+    combined_edges = cv2.bitwise_or(edges1, edges2)
+
+    # Find contours from all methods
+    contours1, _ = cv2.findContours(edges1, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    contours2, _ = cv2.findContours(adaptive_thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    contours3, _ = cv2.findContours(combined_edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+    all_contours = list(contours1) + list(contours2) + list(contours3)
+
+    regions = []
+    for contour in all_contours:
+        x, y, w, h = cv2.boundingRect(contour)
+        area = w * h
+        aspect_ratio = w / h if h > 0 else 0
+
+        # Enhanced criteria for better detection
+        if (500 < area < 50000 and  # Wider area range
+            1.5 < aspect_ratio < 8.0 and  # Wider aspect ratio range
+            w > 40 and h > 15 and  # Smaller minimum size
+            (w/h > 1.2)):  # Ensure width > height
+
+            # Expand region for better OCR
+            padding_x = int(w * 0.15)
+            padding_y = int(h * 0.15)
+            x = max(0, x - padding_x)
+            y = max(0, y - padding_y)
+            w = min(frame.shape[1] - x, w + 2 * padding_x)
+            h = min(frame.shape[0] - y, h + 2 * padding_y)
+
+            regions.append((x, y, w, h))
+
+    # Remove duplicate regions
+    unique_regions = []
+    for region in regions:
+        x1, y1, w1, h1 = region
+        is_duplicate = False
+        for existing in unique_regions:
+            x2, y2, w2, h2 = existing
+            # Check if regions overlap significantly
+            if (abs(x1 - x2) < 20 and abs(y1 - y2) < 20 and
+                abs(w1 - w2) < 30 and abs(h1 - h2) < 20):
+                is_duplicate = True
+                break
+        if not is_duplicate:
+            unique_regions.append(region)
+
+    return unique_regions
+
+def save_plate_image(plate_crop, plate_text, confidence, frame_count, output_dir):
+    """Save individual plate image with descriptive filename"""
+    # Create filename with plate info
+    filename = f"plate_{plate_text}_conf_{confidence:.2f}_frame_{frame_count}.jpg"
+    filepath = os.path.join(output_dir, filename)
+
+    # Save the image
+    cv2.imwrite(filepath, plate_crop)
+    return filepath
+
+class EnhancedPlateTracker:
+    """Enhanced plate tracker with better timing and accuracy"""
+    def __init__(self, max_frames_without_detection=10):  # Reduced for faster disappearance
+        self.active_plates = {}
+        self.max_frames_without_detection = max_frames_without_detection
+        self.all_detected_plates = {}
+        self.plate_history = defaultdict(list)  # Track plate detection history
+
+    def update_plates(self, detected_plates, current_frame):
+        """Update active plates and remove old ones with enhanced logic"""
+        # Mark all active plates as not detected in this frame
+        for plate_text in list(self.active_plates.keys()):
+            self.active_plates[plate_text]['frames_since_last_seen'] += 1
+            self.active_plates[plate_text]['detected_in_current_frame'] = False
+
+        # Update or add newly detected plates
+        for plate_data in detected_plates:
+            plate_text = plate_data['plate']
+
+            # Add to history
+            self.plate_history[plate_text].append({
+                'frame': current_frame,
+                'confidence': plate_data['confidence'],
+                'bbox': plate_data['bbox']
+            })
+
+            # Keep only recent history (last 50 frames)
+            if len(self.plate_history[plate_text]) > 50:
+                self.plate_history[plate_text] = self.plate_history[plate_text][-50:]
+
+            if plate_text in self.active_plates:
+                # Update existing plate
+                self.active_plates[plate_text].update({
+                    'last_seen_frame': current_frame,
+                    'frames_since_last_seen': 0,
+                    'bbox': plate_data['bbox'],
+                    'confidence': plate_data['confidence'],
+                    'detected_in_current_frame': True
+                })
+            else:
+                # Add new plate only if we've seen it consistently
+                recent_detections = [h for h in self.plate_history[plate_text]
+                                   if current_frame - h['frame'] <= 15]
+                if len(recent_detections) >= 2:  # Seen in at least 2 of last 15 frames
+                    self.active_plates[plate_text] = {
+                        'plate': plate_text,
+                        'last_seen_frame': current_frame,
+                        'frames_since_last_seen': 0,
+                        'bbox': plate_data['bbox'],
+                        'confidence': plate_data['confidence'],
+                        'first_detected_frame': current_frame,
+                        'detected_in_current_frame': True
+                    }
+
+            # Store in all detected plates (for final results)
+            if plate_text not in self.all_detected_plates:
+                self.all_detected_plates[plate_text] = self.active_plates.get(plate_text, plate_data)
+
+        # Remove plates that haven't been seen for a while
+        plates_to_remove = []
+        for plate_text, plate_info in self.active_plates.items():
+            if (plate_info['frames_since_last_seen'] > self.max_frames_without_detection or
+                not plate_info.get('detected_in_current_frame', False)):
+                plates_to_remove.append(plate_text)
+
+        for plate_text in plates_to_remove:
+            del self.active_plates[plate_text]
+
+    def get_active_plates(self):
+        """Get currently active plates"""
+        return [plate for plate in self.active_plates.values()
+                if plate.get('detected_in_current_frame', False)]
+
+def process_video_enhanced(video_path, output_path="output_enhanced.mp4", slow_motion_factor=2):
+    """Enhanced video processing with better plate detection and timing"""
+
+    cap = cv2.VideoCapture(video_path)
+    if not cap.isOpened():
+        print("❌ Cannot open video file")
+        return [], []
+
+    # Video properties
+    original_fps = int(cap.get(cv2.CAP_PROP_FPS))
+    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+
+    # Slow motion output settings
+    output_fps = original_fps // slow_motion_factor
+
+    print(f"📹 Video Info: {width}x{height}, {original_fps} FPS, {total_frames} frames")
+    print(f"🎬 Output: Slow motion ({slow_motion_factor}x slower), {output_fps} FPS")
+
+    # Output video with error handling
+    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+    out = cv2.VideoWriter(output_path, fourcc, output_fps, (width, height))
+
+    if not out.isOpened():
+        print("❌ Cannot create output video file")
+        cap.release()
+        return [], []
+
+    # Initialize enhanced plate tracker
+    plate_tracker = EnhancedPlateTracker(max_frames_without_detection=8)
+
+    # Tracking
+    saved_plate_images = []
+    frame_count = 0
+    processed_count = 0
+    start_time = time.time()
+
+    print("🎬 Starting ENHANCED video processing...")
+
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            break
+
+        frame_count += 1
+
+        # Create display frame
+        display_frame = frame.copy()
+
+        # Process every 2nd frame for better detection (increased from 3rd)
+        should_process = (frame_count % 2 == 0)
+
+        if should_process:
+            processed_count += 1
+
+            # Detect plate regions with enhanced detection
+            regions = enhanced_plate_detection(frame)
+
+            current_frame_detections = []
+
+            # OCR on detected regions
+            for (x, y, w, h) in regions:
+                crop = frame[y:y+h, x:x+w]
+                if crop.size == 0:
+                    continue
+
+                try:
+                    # Enhanced OCR with different parameter combinations
+                    results1 = reader.readtext(crop, detail=1, paragraph=False, batch_size=16)
+                    results2 = reader.readtext(crop, detail=1, paragraph=True, batch_size=16)
+
+                    all_results = results1 + results2
+
+                    for _, text, conf in all_results:
+                        if conf > 0.3:  # Lower confidence threshold for better detection
+                            cleaned = clean_plate_text(text)
+
+                            # Use enhanced validation
+                            if is_valid_plate_enhanced(cleaned, VALID_PLATES_MANUAL):
+                                plate_data = {
+                                    'plate': cleaned,
+                                    'confidence': conf,
+                                    'bbox': (x, y, w, h),
+                                    'frame': frame_count
+                                }
+                                current_frame_detections.append(plate_data)
+
+                                # Save plate image only for new high-confidence detections
+                                if (cleaned not in plate_tracker.all_detected_plates and
+                                    conf > 0.6):
+                                    image_path = save_plate_image(crop, cleaned, conf, frame_count, output_dir)
+                                    saved_plate_images.append({
+                                        'plate': cleaned,
+                                        'image_path': image_path,
+                                        'confidence': conf,
+                                        'frame': frame_count
+                                    })
+                except Exception as e:
+                    continue
+
+            # Update plate tracker
+            plate_tracker.update_plates(current_frame_detections, frame_count)
+
+        # Draw ONLY plates detected in current frame
+        colors = [(0, 255, 0), (255, 0, 0), (0, 0, 255), (255, 255, 0), (255, 0, 255)]
+        active_plates = plate_tracker.get_active_plates()
+
+        for i, plate_data in enumerate(active_plates):
+            plate_text = plate_data['plate']
+            confidence = plate_data['confidence']
+            x, y, w, h = plate_data['bbox']
+
+            color = colors[i % len(colors)]
+
+            # Draw bounding box
+            cv2.rectangle(display_frame, (x, y), (x + w, y + h), color, 3)
+
+            # Get plate info using manual dataset
+            state_name, district_name = get_plate_info(plate_text, RTO_DATA_MANUAL)
+
+            # Display information
+            info_text = f"{plate_text} ({confidence:.2f})"
+            cv2.putText(display_frame, info_text, (x, y - 10),
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
+
+            state_text = f"State: {state_name}"
+            cv2.putText(display_frame, state_text, (x, y + h + 25),
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
+
+            district_text = f"District: {district_name}"
+            cv2.putText(display_frame, district_text, (x, y + h + 45),
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
+
+        # Add frame counter and statistics
+        cv2.putText(display_frame, f"Frame: {frame_count}/{total_frames}",
+                   (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+        cv2.putText(display_frame, f"Active Plates: {len(active_plates)}",
+                   (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+        cv2.putText(display_frame, f"Total Unique: {len(plate_tracker.all_detected_plates)}",
+                   (10, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+
+        # Write output frame (multiple times for slow motion)
+        for _ in range(slow_motion_factor):
+            out.write(display_frame)
+
+        # Progress update
+        if processed_count % 20 == 0:
+            elapsed = time.time() - start_time
+            fps_processed = processed_count / elapsed
+            print(f"📊 Processed {frame_count}/{total_frames} | Active: {len(active_plates)} | Total: {len(plate_tracker.all_detected_plates)} | Speed: {fps_processed:.1f} FPS")
+
+    # Cleanup
+    cap.release()
+    out.release()
+
+    total_time = time.time() - start_time
+    print(f"\n✅ Enhanced processing completed in {total_time:.1f} seconds")
+
+    # Convert all detected plates to list for return
+    final_detected_plates = list(plate_tracker.all_detected_plates.values())
+
+    return final_detected_plates, saved_plate_images
+
+# === MAIN EXECUTION ===
+print("🚀 Starting ENHANCED video processing...")
+print("⚡ Features: Better detection + Faster disappearance + MIC series support")
+
+start_time = time.time()
+detected_plates, saved_images = process_video_enhanced(video_path, slow_motion_factor=2)
+processing_time = time.time() - start_time
+
+# Download processed video
+files.download("output_enhanced.mp4")
+print("\n📥 Enhanced processed video downloaded!")
+
+# === RESULTS ===
+print("\n" + "="*60)
+print("🎯 ENHANCED DETECTION RESULTS")
+print("="*60)
+
+if detected_plates:
+    # Sort by confidence
+    detected_plates.sort(key=lambda x: x['confidence'], reverse=True)
+
+    for i, plate_data in enumerate(detected_plates, 1):
+        plate_text = plate_data['plate']
+        confidence = plate_data['confidence']
+        state_name, district_name = get_plate_info(plate_text, RTO_DATA_MANUAL)
+
+        print(f"\n🚗 PLATE {i}: {plate_text}")
+        print(f"   📊 Confidence: {confidence:.3f}")
+        print(f"   🏛️  State: {state_name}")
+        print(f"   📍 District: {district_name}")
+
+        # Mark if plate was in manual dataset
+        if plate_text in VALID_PLATES_MANUAL:
+            print(f"   ✅ Verified in dataset")
+else:
+    print("❌ No license plates detected")
+
+print("\n🎉 ENHANCED PROCESSING COMPLETED!")
+print("📁 Outputs generated:")
+print("   • Enhanced processed video (output_enhanced.mp4)")
+print("   • Detected plate images folder (detected_plates/)")
+print("   • Better plate detection and timing")
